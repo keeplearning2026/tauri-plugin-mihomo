@@ -8,6 +8,46 @@ use ts_rs::TS;
 
 use crate::ipc::WrapStream;
 
+macro_rules! string_enum {
+    (
+        $(#[$enum_meta:meta])*
+        pub enum $name:ident {
+            $($variant:ident => $value:literal,)*
+        }
+    ) => {
+        $(#[$enum_meta])*
+        pub enum $name {
+            $($variant,)*
+            Unknown(String),
+        }
+
+        impl $name {
+            pub fn as_str(&self) -> &str {
+                match self {
+                    $(Self::$variant => $value,)*
+                    Self::Unknown(value) => value,
+                }
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+                serializer.serialize_str(self.as_str())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+                let value = String::deserialize(deserializer)?;
+                Ok(match value.as_str() {
+                    $($value => Self::$variant,)*
+                    _ => Self::Unknown(value),
+                })
+            }
+        }
+    };
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Protocol {
@@ -502,41 +542,44 @@ pub struct Proxy {
     pub routing_mark: i8,
 }
 
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
-#[ts(export)]
-pub enum ProxyType {
-    Direct,
-    Reject,
-    RejectDrop,
-    Compatible,
-    Pass,
-    Dns,
-    Shadowsocks,
-    ShadowsocksR,
-    Snell,
-    Socks5,
-    Http,
-    Vmess,
-    Vless,
-    Trojan,
-    Hysteria,
-    Hysteria2,
-    WireGuard,
-    Tuic,
-    Ssh,
-    Mieru,
-    Masque,
-    AnyTLS,
-    Relay,
-    Sudoku,
-    TrustTunnel,
-    OpenVPN,
-    Tailscale,
-    GostRelay,
-    Selector,
-    Fallback,
-    URLTest,
-    LoadBalance,
+string_enum! {
+    #[derive(Debug, TS, PartialEq, Eq)]
+    #[ts(export)]
+    #[ts(type = "string")]
+    pub enum ProxyType {
+        Direct => "Direct",
+        Reject => "Reject",
+        RejectDrop => "RejectDrop",
+        Compatible => "Compatible",
+        Pass => "Pass",
+        Dns => "Dns",
+        Shadowsocks => "Shadowsocks",
+        ShadowsocksR => "ShadowsocksR",
+        Snell => "Snell",
+        Socks5 => "Socks5",
+        Http => "Http",
+        Vmess => "Vmess",
+        Vless => "Vless",
+        Trojan => "Trojan",
+        Hysteria => "Hysteria",
+        Hysteria2 => "Hysteria2",
+        WireGuard => "WireGuard",
+        Tuic => "Tuic",
+        Ssh => "Ssh",
+        Mieru => "Mieru",
+        Masque => "Masque",
+        AnyTLS => "AnyTLS",
+        Relay => "Relay",
+        Sudoku => "Sudoku",
+        TrustTunnel => "TrustTunnel",
+        OpenVPN => "OpenVPN",
+        Tailscale => "Tailscale",
+        GostRelay => "GostRelay",
+        Selector => "Selector",
+        Fallback => "Fallback",
+        URLTest => "URLTest",
+        LoadBalance => "LoadBalance",
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
@@ -754,39 +797,28 @@ pub enum Network {
     ALLNet,
 }
 
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
-#[ts(export)]
-pub enum ConnectionType {
-    HTTP,
-    HTTPS,
-    #[serde(rename = "Socks4")]
-    SOCKS4,
-    #[serde(rename = "Socks5")]
-    SOCKS5,
-    #[serde(rename = "ShadowSocks")]
-    SHADOWSOCKS,
-    #[serde(rename = "Vmess")]
-    VMESS,
-    #[serde(rename = "Vless")]
-    VLESS,
-    #[serde(rename = "Redir")]
-    REDIR,
-    #[serde(rename = "TProxy")]
-    TPROXY,
-    #[serde(rename = "Trojan")]
-    TROJAN,
-    #[serde(rename = "Tunnel")]
-    TUNNEL,
-    #[serde(rename = "Tun")]
-    TUN,
-    #[serde(rename = "Tuic")]
-    TUIC,
-    #[serde(rename = "Hysteria2")]
-    HYSTERIA2,
-    #[serde(rename = "AnyTLS")]
-    ANYTLS,
-    #[serde(rename = "Inner")]
-    INNER,
+string_enum! {
+    #[derive(Debug, TS, PartialEq, Eq)]
+    #[ts(export)]
+    #[ts(type = "string")]
+    pub enum ConnectionType {
+        HTTP => "HTTP",
+        HTTPS => "HTTPS",
+        SOCKS4 => "Socks4",
+        SOCKS5 => "Socks5",
+        SHADOWSOCKS => "ShadowSocks",
+        VMESS => "Vmess",
+        VLESS => "Vless",
+        REDIR => "Redir",
+        TPROXY => "TProxy",
+        TROJAN => "Trojan",
+        TUNNEL => "Tunnel",
+        TUN => "Tun",
+        TUIC => "Tuic",
+        HYSTERIA2 => "Hysteria2",
+        ANYTLS => "AnyTLS",
+        INNER => "Inner",
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
