@@ -484,6 +484,7 @@ impl Display for CoreUpdaterChannel {
     }
 }
 
+/// clash mode enum
 #[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[ts(export)]
 #[serde(rename_all = "lowercase")]
@@ -504,6 +505,7 @@ impl Display for ClashMode {
     }
 }
 
+/// tun stack enum
 #[derive(Debug, TS, PartialEq, Eq)]
 #[ts(export)]
 pub enum TunStack {
