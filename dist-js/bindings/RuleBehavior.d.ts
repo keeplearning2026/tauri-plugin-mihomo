@@ -1,1 +1,1 @@
-export type RuleBehavior = "Domain" | "IPCIDR" | "Classical" | (string & {});
+export type RuleBehavior = "Domain" | "IPCIDR" | "Classical";

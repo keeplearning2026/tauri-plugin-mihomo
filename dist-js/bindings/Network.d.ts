@@ -1,1 +1,1 @@
-export type Network = "tcp" | "udp" | "all" | (string & {});
+export type Network = string;

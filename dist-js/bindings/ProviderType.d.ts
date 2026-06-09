@@ -1,1 +1,1 @@
-export type ProviderType = "Proxy" | "Rule" | (string & {});
+export type ProviderType = "Proxy" | "Rule";
