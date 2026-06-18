@@ -297,7 +297,17 @@ async function clearAllWsConnections() {
     await invoke("plugin:mihomo|clear_all_ws_connections");
 }
 const textDecoder = new TextDecoder();
+function isMessageKind(message) {
+    if (typeof message !== "object" || message === null || Array.isArray(message)) {
+        return false;
+    }
+    const value = message;
+    return value.type === "Text" && typeof value.data === "string";
+}
 function normalizeWebSocketMessage(message) {
+    if (isMessageKind(message)) {
+        return message;
+    }
     if (typeof message === "string") {
         return { type: "Text", data: message };
     }

@@ -390,11 +390,23 @@ export interface MessageKind<T, D> {
 
 export type Message = MessageKind<"Text", string>;
 
-type RawTextChannelMessage = string | ArrayBuffer | Uint8Array | number[];
+type RawTextChannelMessage = string | ArrayBuffer | Uint8Array | number[] | Message;
 
 const textDecoder = new TextDecoder();
 
+function isMessageKind(message: RawTextChannelMessage): message is Message {
+  if (typeof message !== "object" || message === null || Array.isArray(message)) {
+    return false;
+  }
+
+  const value = message as Partial<Message>;
+  return value.type === "Text" && typeof value.data === "string";
+}
+
 function normalizeWebSocketMessage(message: RawTextChannelMessage): Message {
+  if (isMessageKind(message)) {
+    return message;
+  }
   if (typeof message === "string") {
     return { type: "Text", data: message };
   }

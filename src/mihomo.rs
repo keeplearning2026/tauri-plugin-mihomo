@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use http::{
     HeaderMap, HeaderValue, Request,
     header::{AUTHORIZATION, CONNECTION, CONTENT_TYPE, HOST, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION, UPGRADE},
@@ -92,6 +92,56 @@ async fn untrack_ws_reader(key: WsReaderKey) {
     WS_READER_CANCELLATIONS.lock().await.remove(&key);
 }
 
+fn spawn_ws_reader<R, F>(
+    manager: Arc<ConnectionManager>,
+    id: ConnectionId,
+    mut reader: R,
+    mut cancel_reader_rx: tokio::sync::oneshot::Receiver<()>,
+    reader_key: WsReaderKey,
+    on_message: F,
+) where
+    R: Stream<Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin + Send + 'static,
+    F: Fn(InvokeResponseBody) -> bool + Send + 'static,
+{
+    tokio::spawn(async move {
+        loop {
+            log::trace!("waiting for websocket message, connection_id: {id}");
+            tokio::select! {
+                biased;
+                _ = &mut cancel_reader_rx => {
+                    log::debug!("connection [{id}] reader cancelled");
+                    break;
+                }
+                message = reader.next() => {
+                    match message {
+                        Some(message) => {
+                            let (response, should_close) = websocket_message_to_channel_body(message);
+                            if should_close {
+                                log::debug!("connection [{id}] closed");
+                            }
+                            let keep_reader = response.is_none_or(&on_message);
+                            if should_close || !keep_reader {
+                                if !keep_reader {
+                                    log::debug!("message receiver dropped, closing websocket connection [{id}]");
+                                }
+                                manager.0.write().await.remove(&id);
+                                untrack_ws_reader(reader_key).await;
+                                break;
+                            }
+                        }
+                        None => {
+                            log::debug!("connection [{id}] stream ended");
+                            manager.0.write().await.remove(&id);
+                            untrack_ws_reader(reader_key).await;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
 pub struct Mihomo {
     pub protocol: Protocol,
     pub external_host: Option<String>,
@@ -126,6 +176,17 @@ impl Mihomo {
         let pool = IpcConnectionPool::global()?;
         pool.clear_pool();
         Ok(())
+    }
+
+    #[inline]
+    fn socket_path(&self) -> Result<&str> {
+        self.socket_path.as_deref().ok_or_else(|| {
+            log::error!("missing socket path parameter");
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "missing socket path".to_string(),
+            ))
+        })
     }
 
     #[inline]
@@ -187,16 +248,9 @@ impl Mihomo {
         match self.protocol {
             Protocol::Http => client.send().await.map_err(Error::Reqwest),
             Protocol::LocalSocket => {
-                if let Some(socket_path) = self.socket_path.as_ref() {
-                    log::debug!("send to local socket: {socket_path}");
-                    client.send_by_local_socket(socket_path).await
-                } else {
-                    log::error!("missing socket path parameter");
-                    Err(Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "missing socket path".to_string(),
-                    )))
-                }
+                let socket_path = self.socket_path()?;
+                log::debug!("send to local socket: {socket_path}");
+                client.send_by_local_socket(socket_path).await
             }
         }
     }
@@ -236,8 +290,8 @@ impl Mihomo {
                 log::debug!("starting connect to websocket by using http");
                 let request = url.into_client_request()?;
                 let (ws_stream, _) = connect_async(request).await?;
-                let (writer, mut reader) = ws_stream.split();
-                let (cancel_reader, mut cancel_reader_rx) = tokio::sync::oneshot::channel();
+                let (writer, reader) = ws_stream.split();
+                let (cancel_reader, cancel_reader_rx) = tokio::sync::oneshot::channel();
                 let reader_key = ws_reader_key(&manager, id);
 
                 manager
@@ -247,118 +301,37 @@ impl Mihomo {
                     .insert(id, WebSocketWriter::TcpStreamWriter(writer));
                 track_ws_reader(reader_key, cancel_reader).await;
 
-                tokio::spawn(async move {
-                    let manager_ = Arc::clone(&manager);
-                    loop {
-                        log::trace!("waiting for websocket message, connection_id: {id}");
-                        tokio::select! {
-                            biased;
-                            _ = &mut cancel_reader_rx => {
-                                log::debug!("connection [{id}] reader cancelled");
-                                break;
-                            }
-                            message = reader.next() => {
-                                match message {
-                                    Some(message) => {
-                                        let (response, should_close) = websocket_message_to_channel_body(message);
-                                        if should_close {
-                                            log::debug!("connection [{id}] is closed");
-                                        }
-                                        let keep_reader = response.is_none_or(&on_message);
-                                        if should_close || !keep_reader {
-                                            if !keep_reader {
-                                                log::debug!("message receiver dropped, closing websocket connection [{id}]");
-                                            }
-                                            manager_.0.write().await.remove(&id);
-                                            untrack_ws_reader(reader_key).await;
-                                            break;
-                                        }
-                                    }
-                                    None => {
-                                        log::debug!("connection [{id}] stream ended");
-                                        manager_.0.write().await.remove(&id);
-                                        untrack_ws_reader(reader_key).await;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
+                spawn_ws_reader(manager, id, reader, cancel_reader_rx, reader_key, on_message);
 
                 Ok(id)
             }
             Protocol::LocalSocket => {
-                if let Some(socket_path) = self.socket_path.as_ref() {
-                    log::debug!("starting connect to websocket by using local socket: {socket_path}");
-                    let stream = crate::ipc::connect_to_socket(socket_path).await?;
+                let socket_path = self.socket_path()?;
+                log::debug!("starting connect to websocket by using local socket: {socket_path}");
+                let stream = crate::ipc::connect_to_socket(socket_path).await?;
 
-                    let request = Request::builder()
-                        .uri(url)
-                        .header(HOST, "clash-verge")
-                        .header(SEC_WEBSOCKET_KEY, utils::generate_websocket_key())
-                        .header(CONNECTION, "Upgrade")
-                        .header(UPGRADE, "websocket")
-                        .header(SEC_WEBSOCKET_VERSION, "13")
-                        .body(())?;
-                    let (ws_stream, _) = client_async(request, stream).await?;
-                    let (writer, mut reader) = ws_stream.split();
-                    let (cancel_reader, mut cancel_reader_rx) = tokio::sync::oneshot::channel();
-                    let reader_key = ws_reader_key(&manager, id);
+                let request = Request::builder()
+                    .uri(url)
+                    .header(HOST, "clash-verge")
+                    .header(SEC_WEBSOCKET_KEY, utils::generate_websocket_key())
+                    .header(CONNECTION, "Upgrade")
+                    .header(UPGRADE, "websocket")
+                    .header(SEC_WEBSOCKET_VERSION, "13")
+                    .body(())?;
+                let (ws_stream, _) = client_async(request, stream).await?;
+                let (writer, reader) = ws_stream.split();
+                let (cancel_reader, cancel_reader_rx) = tokio::sync::oneshot::channel();
+                let reader_key = ws_reader_key(&manager, id);
 
-                    manager
-                        .0
-                        .write()
-                        .await
-                        .insert(id, WebSocketWriter::SocketStreamWriter(writer));
-                    track_ws_reader(reader_key, cancel_reader).await;
+                manager
+                    .0
+                    .write()
+                    .await
+                    .insert(id, WebSocketWriter::SocketStreamWriter(writer));
+                track_ws_reader(reader_key, cancel_reader).await;
 
-                    tokio::spawn(async move {
-                        let manager_ = Arc::clone(&manager);
-                        loop {
-                            log::trace!("waiting for websocket message, connection_id: {id}");
-                            tokio::select! {
-                                biased;
-                                _ = &mut cancel_reader_rx => {
-                                    log::debug!("connection [{id}] reader cancelled");
-                                    break;
-                                }
-                                message = reader.next() => {
-                                    match message {
-                                    Some(message) => {
-                                            let (response, should_close) = websocket_message_to_channel_body(message);
-                                            if should_close {
-                                                log::debug!("connection [{id}] closed");
-                                            }
-                                            let keep_reader = response.is_none_or(&on_message);
-                                            if should_close || !keep_reader {
-                                                if !keep_reader {
-                                                    log::debug!("message receiver dropped, closing websocket connection [{id}]");
-                                                }
-                                                manager_.0.write().await.remove(&id);
-                                                untrack_ws_reader(reader_key).await;
-                                                break;
-                                            }
-                                        }
-                                        None => {
-                                            log::debug!("connection [{id}] stream ended");
-                                            manager_.0.write().await.remove(&id);
-                                            untrack_ws_reader(reader_key).await;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    });
-                    Ok(id)
-                } else {
-                    log::error!("missing socket path parameter");
-                    Err(Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "missing socket path".to_string(),
-                    )))
-                }
+                spawn_ws_reader(manager, id, reader, cancel_reader_rx, reader_key, on_message);
+                Ok(id)
             }
         }
     }
@@ -462,10 +435,10 @@ impl Mihomo {
     where
         F: Fn(InvokeResponseBody) -> bool + Send + 'static,
     {
+        // url 后面添加 format=structured 参数的日志格式如下：
+        // {"time":"11:49:58","level":"debug","message":"[DNS] hijack udp:192.168.2.1:53 from 198.18.0.1:42761","fields":[]}
         let ws_url = self.get_websocket_url("/logs")?;
         let ws_url = match self.protocol {
-            // url 后面添加 format=structured 参数的日志格式如下：
-            // {"time":"11:49:58","level":"debug","message":"[DNS] hijack udp:192.168.2.1:53 from 198.18.0.1:42761","fields":[]}
             Protocol::Http => format!("{ws_url}&level={level}"),
             Protocol::LocalSocket => format!("{ws_url}?level={level}"),
         };
