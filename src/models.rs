@@ -407,7 +407,7 @@ pub struct BrutalOption {
     pub down: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[derive(Debug, Serialize, TS, PartialEq, Eq)]
 #[ts(export)]
 pub enum LogLevel {
     DEBUG,
@@ -415,6 +415,25 @@ pub enum LogLevel {
     WARNING,
     ERROR,
     SILENT,
+}
+
+impl<'de> Deserialize<'de> for LogLevel {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "DEBUG" | "debug" => Ok(LogLevel::DEBUG),
+            "INFO" | "info" => Ok(LogLevel::INFO),
+            "WARNING" | "warning" => Ok(LogLevel::WARNING),
+            "ERROR" | "error" => Ok(LogLevel::ERROR),
+            "SILENT" | "silent" => Ok(LogLevel::SILENT),
+            _ => Err(serde::de::Error::unknown_variant(
+                &value,
+                &[
+                    "DEBUG", "INFO", "WARNING", "ERROR", "SILENT", "debug", "info", "warning", "error", "silent",
+                ],
+            )),
+        }
+    }
 }
 
 impl Display for LogLevel {
@@ -441,12 +460,27 @@ pub struct GeoXUrl {
     pub geo_site: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[derive(Debug, Serialize, TS, PartialEq, Eq)]
 #[ts(export)]
 pub enum FindProcessMode {
     Strict,
     Always,
     Off,
+}
+
+impl<'de> Deserialize<'de> for FindProcessMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "Strict" | "strict" => Ok(FindProcessMode::Strict),
+            "Always" | "always" => Ok(FindProcessMode::Always),
+            "Off" | "off" => Ok(FindProcessMode::Off),
+            _ => Err(serde::de::Error::unknown_variant(
+                &value,
+                &["Strict", "Always", "Off", "strict", "always", "off"],
+            )),
+        }
+    }
 }
 
 /// mihomo version
