@@ -269,7 +269,9 @@ impl Mihomo {
             Protocol::Http => {
                 if let Some(host) = self.external_host.as_ref() {
                     let port = self.external_port.unwrap_or(9090);
-                    let secret = self.secret.as_deref().unwrap_or_default();
+                    // token 作为 query 参数需 percent-encode：含特殊字符（& # 空格等）的 secret
+                    // 否则会破坏 URL 结构与认证，编码后也保证日志脱敏能精确切到 token 边界
+                    let secret = urlencoding::encode(self.secret.as_deref().unwrap_or_default());
                     Ok(format!("ws://{host}:{port}/{suffix_url}?token={secret}"))
                 } else {
                     log::error!("missing external host parameter");
@@ -289,7 +291,15 @@ impl Mihomo {
         F: Fn(InvokeResponseBody) -> bool + Send + 'static,
     {
         let id = rand::random();
-        log::info!("connecting to websocket: {url}, id: {id}");
+        // 脱敏 URL 中的 token 查询参数，避免 secret 进入日志
+        let safe_url = if let Some(idx) = url.find("token=") {
+            let val_start = idx + "token=".len();
+            let val_end = url[val_start..].find('&').map_or(url.len(), |i| val_start + i);
+            format!("{}token=<redacted>{}", &url[..idx], &url[val_end..])
+        } else {
+            url.clone()
+        };
+        log::info!("connecting to websocket: {safe_url}, id: {id}");
         let manager = Arc::clone(&self.connection_manager);
 
         match self.protocol {
