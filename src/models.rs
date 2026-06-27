@@ -51,6 +51,12 @@ macro_rules! string_enum {
             }
         }
 
+        impl Default for $name {
+            fn default() -> Self {
+                Self::$first_variant
+            }
+        }
+
     };
 }
 
@@ -77,9 +83,9 @@ impl Display for Protocol {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[ts(export, rename_all = "camelCase")]
-#[serde(rename_all(serialize = "camelCase", deserialize = "kebab-case"))]
+#[serde(default, rename_all(serialize = "camelCase", deserialize = "kebab-case"))]
 pub struct BaseConfig {
     pub port: u16,
     pub socks_port: u16,
@@ -124,9 +130,9 @@ pub struct BaseConfig {
     pub unknown_fields: HashMap<String, Value>,
 }
 
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[ts(export, rename_all = "camelCase")]
-#[serde(rename_all(serialize = "camelCase", deserialize = "kebab-case"))]
+#[serde(default, rename_all(serialize = "camelCase", deserialize = "kebab-case"))]
 pub struct TunConfig {
     pub enable: bool,
     pub device: String,
@@ -407,10 +413,11 @@ pub struct BrutalOption {
     pub down: Option<String>,
 }
 
-#[derive(Debug, Serialize, TS, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, TS, PartialEq, Eq)]
 #[ts(export)]
 pub enum LogLevel {
     DEBUG,
+    #[default]
     INFO,
     WARNING,
     ERROR,
@@ -460,11 +467,12 @@ pub struct GeoXUrl {
     pub geo_site: String,
 }
 
-#[derive(Debug, Serialize, TS, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, TS, PartialEq, Eq)]
 #[ts(export)]
 pub enum FindProcessMode {
     Strict,
     Always,
+    #[default]
     Off,
 }
 
@@ -519,10 +527,11 @@ impl Display for CoreUpdaterChannel {
 }
 
 /// clash mode enum
-#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[ts(export)]
 #[serde(rename_all = "lowercase")]
 pub enum ClashMode {
+    #[default]
     Rule,
     Global,
     Direct,
@@ -540,48 +549,51 @@ impl Display for ClashMode {
 }
 
 /// tun stack enum
-#[derive(Debug, TS, PartialEq, Eq)]
+#[derive(Debug, Default, TS, PartialEq, Eq)]
 #[ts(export)]
+#[ts(type = "string")]
 pub enum TunStack {
-    #[ts(rename = "Mixed")]
+    #[default]
     Mixed,
-    #[ts(rename = "gVisor")]
     Gvisor,
-    #[ts(rename = "System")]
     System,
+    /// 容错：未识别的 stack 值（新增值/大小写差异/空串等），保留原值而非整体反序列化失败
+    Unknown(String),
+}
+
+impl TunStack {
+    pub fn as_str(&self) -> &str {
+        match self {
+            TunStack::Mixed => "Mixed",
+            TunStack::Gvisor => "gVisor",
+            TunStack::System => "System",
+            TunStack::Unknown(value) => value,
+        }
+    }
 }
 
 impl Serialize for TunStack {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        let s = match self {
-            TunStack::Mixed => "Mixed",
-            TunStack::Gvisor => "gVisor",
-            TunStack::System => "System",
-        };
-        serializer.serialize_str(s)
+        serializer.serialize_str(self.as_str())
     }
 }
 
 impl<'de> Deserialize<'de> for TunStack {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         let value = String::deserialize(deserializer)?;
-        match value.as_str() {
-            "Mixed" => Ok(Self::Mixed),
-            "gVisor" => Ok(Self::Gvisor),
-            "System" => Ok(Self::System),
-            _ => Err(serde::de::Error::custom("invalid tun stack")),
-        }
+        Ok(match value.as_str() {
+            "Mixed" => Self::Mixed,
+            "gVisor" => Self::Gvisor,
+            "System" => Self::System,
+            _ => Self::Unknown(value),
+        })
     }
 }
 
 impl Display for TunStack {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TunStack::Mixed => write!(f, "Mixed"),
-            TunStack::Gvisor => write!(f, "gVisor"),
-            TunStack::System => write!(f, "System"),
-        }
+        write!(f, "{}", self.as_str())
     }
 }
 
@@ -593,9 +605,9 @@ pub struct Groups {
     pub proxies: Vec<Proxy>,
 }
 
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[ts(export)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct Proxy {
     // group type need
     #[ts(optional)]
@@ -742,25 +754,31 @@ pub struct ProxyProviders {
     pub providers: HashMap<String, ProxyProvider>,
 }
 
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
-#[ts(export)]
-pub enum ProviderType {
-    Proxy,
-    Rule,
+string_enum! {
+    #[derive(Debug, TS, PartialEq, Eq)]
+    #[ts(export)]
+    #[ts(type = "string")]
+    pub enum ProviderType {
+        Proxy => "Proxy",
+        Rule => "Rule",
+    }
 }
 
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
-#[ts(export)]
-pub enum VehicleType {
-    File,
-    HTTP,
-    Compatible,
-    Inline,
+string_enum! {
+    #[derive(Debug, TS, PartialEq, Eq)]
+    #[ts(export)]
+    #[ts(type = "string")]
+    pub enum VehicleType {
+        File => "File",
+        HTTP => "HTTP",
+        Compatible => "Compatible",
+        Inline => "Inline",
+    }
 }
 
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[ts(export)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct ProxyProvider {
     pub name: String,
     #[serde(rename = "type")]
@@ -800,7 +818,8 @@ pub struct Rules {
     pub rules: Vec<Rule>,
 }
 
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[serde(default)]
 #[ts(export)]
 pub struct Rule {
     #[serde(rename = "type")]
@@ -865,29 +884,31 @@ pub struct RuleProviders {
     pub providers: HashMap<String, RuleProvider>,
 }
 
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
-#[ts(export)]
-pub enum RuleBehavior {
-    Domain,
-    #[serde(rename = "IPCIDR")]
-    IpCidr,
-    Classical,
+string_enum! {
+    #[derive(Debug, TS, PartialEq, Eq)]
+    #[ts(export)]
+    #[ts(type = "string")]
+    pub enum RuleBehavior {
+        Domain => "Domain",
+        IpCidr => "IPCIDR",
+        Classical => "Classical",
+    }
 }
 
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
-#[ts(export)]
-pub enum RuleFormat {
-    #[serde(rename = "YamlRule")]
-    Yaml,
-    #[serde(rename = "TextRule")]
-    Text,
-    #[serde(rename = "MrsRule")]
-    Mrs,
+string_enum! {
+    #[derive(Debug, TS, PartialEq, Eq)]
+    #[ts(export)]
+    #[ts(type = "string")]
+    pub enum RuleFormat {
+        Yaml => "YamlRule",
+        Text => "TextRule",
+        Mrs => "MrsRule",
+    }
 }
 
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[ts(export)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct RuleProvider {
     pub behavior: RuleBehavior,
     pub format: RuleFormat,
@@ -904,9 +925,9 @@ pub struct RuleProvider {
 }
 
 /// connections
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[ts(export)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct Connections {
     #[ts(type = "number")]
     pub download_total: u64,
@@ -920,9 +941,9 @@ pub struct Connections {
     pub extra: HashMap<String, Value>,
 }
 
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[ts(export)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct Connection {
     pub id: String,
     pub metadata: ConnectionMetaData,
@@ -993,9 +1014,9 @@ string_enum! {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[ts(export)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct ConnectionMetaData {
     pub network: Network,
 
