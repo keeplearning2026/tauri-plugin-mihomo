@@ -31,6 +31,11 @@ use crate::{
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// 复用单个 reqwest::Client，避免每个请求都重建客户端（HTTP 协议下可复用连接池/DNS）。
+/// 用 `Result` 持有构造结果：首次构造失败时返回错误而非 panic，保持原有错误传播语义。
+static HTTP_CLIENT: LazyLock<reqwest::Result<reqwest::Client>> =
+    LazyLock::new(|| reqwest::ClientBuilder::new().build());
+
 type WsReaderKey = (usize, ConnectionId);
 
 static WS_READER_CANCELLATIONS: LazyLock<Mutex<HashMap<WsReaderKey, tokio::sync::oneshot::Sender<()>>>> =
@@ -227,21 +232,23 @@ impl Mihomo {
     fn build_request(&self, method: Method, suffix_url: &str) -> Result<RequestBuilder> {
         let url = self.get_req_url(suffix_url)?;
         let headers = self.get_req_headers()?;
-        let client = reqwest::ClientBuilder::new().build()?;
+        let client = HTTP_CLIENT
+            .as_ref()
+            .map_err(|e| Error::ConnectionFailed(format!("failed to build http client: {e}")))?;
         let req = match method {
-            Method::POST => Ok(client.post(url).headers(headers)),
-            Method::GET => Ok(client.get(url).headers(headers)),
-            Method::PUT => Ok(client.put(url).headers(headers)),
-            Method::PATCH => Ok(client.patch(url).headers(headers)),
-            Method::DELETE => Ok(client.delete(url).headers(headers)),
+            Method::POST => client.post(url),
+            Method::GET => client.get(url),
+            Method::PUT => client.put(url),
+            Method::PATCH => client.patch(url),
+            Method::DELETE => client.delete(url),
             _ => {
                 let method_str = method.as_str().to_string();
                 log::error!("method not supported: {method_str}");
-                Err(Error::MethodNotSupported(method_str))
+                return Err(Error::MethodNotSupported(method_str));
             }
         };
         // 在此设置 timeout，以供构建 local socket 连接时，获取到 timeout 属性
-        Ok(req?.timeout(DEFAULT_REQUEST_TIMEOUT))
+        Ok(req.headers(headers).timeout(DEFAULT_REQUEST_TIMEOUT))
     }
 
     async fn send_by_protocol(&self, client: RequestBuilder) -> Result<reqwest::Response> {
