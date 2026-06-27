@@ -464,48 +464,39 @@ impl IpcConnectionPool {
     }
 
     #[inline]
-    async fn get_connection<'a>(&'a self, socket_path: &str) -> Result<(IpcConnection, SemaphorePermit<'a>)> {
+    async fn get_connection<'a>(&'a self, socket_path: &str) -> Result<(IpcConnection, Option<SemaphorePermit<'a>>)> {
         log::debug!("get connection from pool");
-        // 确保获取 semaphore permit
+        // 获取并发 permit（overflow 时为 None）
         let permit = self.acquire_permit().await?;
         // 开始创建连接
         let conn = self.acquire_or_create_connection(socket_path).await?;
         Ok((conn, permit))
     }
 
-    async fn acquire_permit<'a>(&'a self) -> Result<SemaphorePermit<'a>> {
+    /// 获取并发 permit。
+    ///
+    /// 返回 `None` 表示在 `RejectPolicy::New` 下池已满、允许本次作为临时超额连接（不持 permit）。
+    /// 旧实现用 `add_permits(1)` 临时扩容却从不回收，导致 permit 数随竞争**永久膨胀**、
+    /// `max_connections` 上限失效；此处改为不膨胀。
+    async fn acquire_permit<'a>(&'a self) -> Result<Option<SemaphorePermit<'a>>> {
         log::debug!("acquire permit");
         match self.semaphore.try_acquire() {
-            Ok(permit) => Ok(permit),
+            Ok(permit) => Ok(Some(permit)),
             Err(_) => match self.config.reject_policy {
-                RejectPolicy::New => {
-                    log::debug!("max permit has acquire, add permit");
-                    self.semaphore.add_permits(1);
-                    match self.semaphore.acquire().await {
-                        Ok(permit) => Ok(permit),
-                        Err(e) => {
-                            log::error!("failed to acquire permit, forget permit");
-                            self.semaphore.forget_permits(1);
-                            Err(Error::ConnectionFailed(e.to_string()))
-                        }
-                    }
-                }
+                // 不等待、不膨胀 permit：本次请求作为临时超额连接（无 permit）
+                RejectPolicy::New => Ok(None),
                 RejectPolicy::Reject => Err(Error::ConnectionPoolFull),
                 RejectPolicy::Timeout(timeout_duration) => {
-                    let acquire_future = self.semaphore.acquire();
-                    match timeout(timeout_duration, acquire_future).await {
-                        Ok(Ok(permit)) => Ok(permit),
+                    match timeout(timeout_duration, self.semaphore.acquire()).await {
+                        Ok(Ok(permit)) => Ok(Some(permit)),
                         Ok(Err(_)) => Err(Error::ConnectionPoolFull),
                         Err(e) => Err(Error::Timeout(e)),
                     }
                 }
-                RejectPolicy::Wait => {
-                    let acquire_future = self.semaphore.acquire().await;
-                    match acquire_future {
-                        Ok(permit) => Ok(permit),
-                        Err(_) => Err(Error::ConnectionPoolFull),
-                    }
-                }
+                RejectPolicy::Wait => match self.semaphore.acquire().await {
+                    Ok(permit) => Ok(Some(permit)),
+                    Err(_) => Err(Error::ConnectionPoolFull),
+                },
             },
         }
     }
